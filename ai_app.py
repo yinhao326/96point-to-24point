@@ -122,6 +122,7 @@ if user_prompt := st.chat_input("输入修改指令 (例如：把所有空值填
                 5. 最终返回修改后的 df。
                 6. ⚠️重要：当前 Pandas 版本 > 2.0，禁止使用 df.append() 或 series.append()，添加行必须使用 pd.concat()。
                 7. ⚠️重要：如果遇到 "24:00" 这种时间字符串，pd.to_datetime 会报错。必须先将 "24:00" 替换为 "00:00" (或者前一天的23:59:59)，或者手动解析，千万不要直接转换。
+                8. ⚠️重要：在使用 f-string 格式化数字时 (如 f"{x:02d}")，如果 x 可能是 float，必须先转为 int (如 f"{int(x):02d}")，否则会报 "Unknown format code 'd' for object of type 'float'"。
                 """
                 
                 full_prompt = f"""
@@ -176,5 +177,6 @@ if user_prompt := st.chat_input("输入修改指令 (例如：把所有空值填
                 st.error(err_msg)
                 st.code(traceback.format_exc())
                 st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
+
 
 
