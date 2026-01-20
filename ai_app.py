@@ -120,6 +120,7 @@ if user_prompt := st.chat_input("输入修改指令 (例如：把所有空值填
                 3. 只返回 Python 代码，不要解释，不要 markdown 标记。
                 4. 必须导入必要的库 (import pandas as pd)。
                 5. 最终返回修改后的 df。
+                6. ⚠️重要：当前 Pandas 版本 > 2.0，禁止使用 df.append() 或 series.append()，添加行必须使用 pd.concat()。
                 """
                 
                 full_prompt = f"""
@@ -174,3 +175,4 @@ if user_prompt := st.chat_input("输入修改指令 (例如：把所有空值填
                 st.error(err_msg)
                 st.code(traceback.format_exc())
                 st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
+
