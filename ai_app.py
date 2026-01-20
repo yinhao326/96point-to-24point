@@ -92,7 +92,8 @@ for message in st.session_state.chat_history:
         st.markdown(message["content"])
 
 # 3. 处理用户输入
-if user_prompt = st.chat_input("输入修改指令 (例如：把所有空值填为0) ..."):
+# 🔴 这里就是刚才报错的地方，已经修改为 := 
+if user_prompt := st.chat_input("输入修改指令 (例如：把所有空值填为0) ..."):
     
     # A. 显示用户的话
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
