@@ -18,7 +18,7 @@ else:
 BASE_URL = "https://api.deepseek.com"
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-st.set_page_config(page_title="AI 全能数据专家", layout="wide")
+st.set_page_config(page_title="AI 可解释数据专家", layout="wide")
 
 # ================= 状态管理 =================
 if "current_df" not in st.session_state:
@@ -26,8 +26,8 @@ if "current_df" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = [] 
 
-st.title("🤖 AI 全能数据专家 (God Mode)")
-st.caption("内置全能运行环境 + 自动纠错闭环。任意需求，使命必达。")
+st.title("🤖 AI 可解释数据专家")
+st.caption("我不光会算，还会用人话告诉你我是怎么算的，方便你核对逻辑。")
 
 # ================= 侧边栏 =================
 with st.sidebar:
@@ -38,12 +38,11 @@ with st.sidebar:
         file_hash = hash(uploaded_file.getvalue())
         if "file_hash" not in st.session_state or st.session_state.file_hash != file_hash:
             try:
-                # 读取时不做特殊处理，原汁原味交给 AI
                 df = pd.read_excel(uploaded_file)
                 st.session_state.current_df = df
                 st.session_state.file_hash = file_hash
                 st.session_state.chat_history = [] 
-                st.session_state.chat_history.append({"role": "assistant", "content": "数据已就绪！无论是清洗、计算还是统计，请尽管吩咐。"})
+                st.session_state.chat_history.append({"role": "assistant", "content": "文件已就绪！请告诉我如何处理。"})
                 st.rerun()
             except Exception as e:
                 st.error(f"读取失败: {e}")
@@ -52,14 +51,14 @@ with st.sidebar:
         if uploaded_file:
             st.session_state.current_df = pd.read_excel(uploaded_file)
             st.session_state.chat_history = []
-            st.session_state.chat_history.append({"role": "assistant", "content": "记忆已清除，数据已恢复初始状态。"})
+            st.session_state.chat_history.append({"role": "assistant", "content": "已重置。"})
             st.rerun()
 
     if st.session_state.current_df is not None:
         st.divider()
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state.current_df.to_excel(writer, index=False)
+            st.session_state.current_df.to_excel(writer, index=True) # 默认保留索引
         st.download_button("📥 下载结果", data=output.getvalue(), file_name="result.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ================= 主界面 =================
@@ -76,89 +75,98 @@ for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# ================= 核心：全能执行引擎 =================
+# ================= 核心：带解释的执行引擎 =================
 if user_prompt := st.chat_input("请输入指令..."):
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
     with st.chat_message("assistant"):
-        status = st.status("🧠 AI 正在解析需求...", expanded=True)
+        status = st.status("🧠 AI 正在拆解逻辑...", expanded=True)
         
         current_df = st.session_state.current_df
-        MAX_RETRIES = 4 # 增加重试次数
+        MAX_RETRIES = 3
         success = False
         
-        # --- 1. 构建全能上下文环境 ---
-        # 这里把所有可能用到的库都预先塞进去，AI 就算忘了 import 也能用
+        # --- 1. 全能环境 ---
         execution_globals = {
-            "pd": pd,
-            "np": np,
-            "re": re,
-            "math": math,
-            "datetime": datetime,
-            "io": io
+            "pd": pd, "np": np, "re": re, "math": math, "datetime": datetime
         }
         
-        # --- 2. 更加智能的 System Prompt ---
+        # --- 2. 核心 Prompt 修改：要求返回逻辑解释 ---
         system_prompt = """
-        你是一个拥有 Python 执行权限的高级数据分析师。
-        任务：编写 `process_step(df)` 函数，返回修改后的 df。
+        你是一个 Python 数据处理专家。
         
-        【环境说明】
-        1. 系统已预置 pandas(pd), numpy(np), re, math, datetime。你依然可以 import，但忘记也没关系。
-        2. 数据中可能包含 '24:00' (需替换为 '00:00' 并+1天) 或 NaT/NaN。
-        3. Pandas 版本 > 2.0，严禁使用 append，请用 pd.concat。
+        【任务】
+        1. 分析用户需求。
+        2. 编写 `process_step(df)` 函数返回修改后的 df。
+        3. **编写一段中文的 `explanation` 字符串**，用“非技术人员也能听懂的话”解释你的计算逻辑，特别是时间聚合的边界（例如："我是把 00:15-01:00 归并为 01:00"）。
         
-        【代码要求】
-        1. 必须具有极强的鲁棒性。在进行数值计算前，先转换类型；在处理时间前，先处理异常值。
-        2. 只返回纯 Python 代码，不带 markdown 标记。
+        【输出格式】
+        你的返回内容必须完全符合以下 Python 代码块格式（不要 markdown）：
+        
+        explanation = "这里写你的中文逻辑解释..."
+        
+        def process_step(df):
+            # 这里写处理代码
+            return df
+        
+        【严格约束】
+        1. 必须优先遵循用户给出的具体示例（如"前4个点算作新的01:00"）。
+        2. Pandas > 2.0，禁用 append，用 concat。
+        3. 遇到时间计算，必须详细解释你是如何划分区间的。
         """
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"数据预览:\n{current_df.head(2).to_markdown()}\n数据类型:\n{current_df.dtypes}\n\n需求: {user_prompt}"}
+            {"role": "user", "content": f"数据预览:\n{current_df.head(2).to_markdown()}\n用户需求: {user_prompt}"}
         ]
 
         for i in range(MAX_RETRIES):
             try:
-                if i > 0: status.write(f"🔧 第 {i} 次自动修复中... (错误已捕获)")
+                if i > 0: status.write(f"🔧 第 {i} 次自动修复中...")
                 
-                # 调用 AI
                 response = client.chat.completions.create(
                     model="deepseek-chat", messages=messages, temperature=0.1
                 )
                 code = response.choices[0].message.content.replace("```python", "").replace("```", "").strip()
                 
-                # 执行代码 (注入了全能环境)
+                # 执行代码
                 local_scope = {}
                 exec(code, execution_globals, local_scope)
                 
                 if 'process_step' not in local_scope: raise ValueError("函数 process_step 未定义")
+                if 'explanation' not in local_scope: local_scope['explanation'] = "（AI 未提供解释，请检查结果）"
                 
-                # 运行函数
-                new_df = local_scope['process_step'](current_df.copy()) # 传入副本防止污染
+                # 运行处理
+                new_df = local_scope['process_step'](current_df.copy())
                 
-                # 成功！
                 st.session_state.current_df = new_df
                 success = True
+                
+                # --- 成功后的展示 ---
                 status.update(label="✅ 执行成功", state="complete", expanded=False)
                 
-                msg = f"✅ 操作完成！(自动修正 {i} 次)" if i > 0 else "✅ 操作完成！"
-                st.markdown(msg)
-                st.session_state.chat_history.append({"role": "assistant", "content": msg})
+                # 重点：显示 AI 的逻辑解释
+                explanation_box = f"""
+                **🧐 逻辑核对 (请务必确认):**
+                > {local_scope['explanation']}
+                
+                ---
+                ✅ 操作完成！
+                """
+                st.markdown(explanation_box)
+                st.session_state.chat_history.append({"role": "assistant", "content": explanation_box})
+                
                 st.rerun()
                 break
 
             except Exception as e:
-                # 捕获所有 Python 运行时的报错
                 error_info = f"{type(e).__name__}: {str(e)}"
                 status.write(f"❌ 捕获错误: {error_info}")
-                
-                # 将错误喂回给 AI，让它下一次修复
                 messages.append({"role": "assistant", "content": code})
-                messages.append({"role": "user", "content": f"代码执行报错: {error_info}\n请针对此错误修改代码。确保处理了空值或类型不匹配问题。"})
+                messages.append({"role": "user", "content": f"报错: {error_info}\n请修正代码。如果是因为没有定义 explanation 变量，请务必定义它。"})
         
         if not success:
             status.update(label="❌ 任务失败", state="error")
-            st.error("AI 尝试了 4 次依然失败。建议：\n1. 检查数据是否极其混乱\n2. 尝试将复杂的指令拆分成两步说")
+            st.error("AI 尝试多次失败。请尝试更详细地描述步骤。")
