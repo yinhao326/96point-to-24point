@@ -1,5 +1,12 @@
 streamlit
-pandas
+pandas>=2.0.0
+numpy
 openpyxl
-tabulate
 openai
+tabulate
+scipy
+scikit-learn
+statsmodels
+matplotlib
+seaborn
+xlsxwriter
