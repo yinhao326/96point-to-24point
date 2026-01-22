@@ -161,52 +161,62 @@ if user_prompt := st.chat_input("输入指令..."):
         
         # --- 关键修改：通过 Prompt 管理预期 ---
         system_prompt = """
-        你是一个 Python 数据处理专家。
+        你是一个 Python 代码生成机器。
         
-        【核心原则：数据锚点绝对保护】
-        在处理时间序列插值时，**严禁**因为日期筛选而丢弃序列末尾的“锚点数据”（即原本的24:00，现在的次日00:00）。
+        【最高指令：输出格式严格限制】
+        1. **严禁**输出 markdown 标记（不要写 ```python）。
+        2. **严禁**在代码前输出任何文字（如“好的”、“代码如下”）。
+        3. **严禁**在代码后输出任何文字。
+        4. **只输出** Python 代码文本。
         
-        【必须执行的 Process_Step 代码逻辑】
+        【代码逻辑要求 (Process_Step 函数)】
+        
+        import pandas as pd
+        import numpy as np
         
         def process_step(df):
-            # 1. 24:00 格式化与锚点保留
-            # -------------------------------------------------------
-            # 必须先检测是否有 "24:00"。
-            # 如果有，将其标记为 is_24_style=True，并替换为 "00:00" (次日)。
-            # 关键：转换 datetime 后，必须保留整个 DataFrame，**不要**按单日过滤数据，
-            # 否则会导致 23:00-24:00 之间的插值失去终点！
+            # --- 1. 强力清洗与锚点保护 ---
+            # 检查是否有 '24:00' 格式
+            str_df = df.astype(str)
+            has_24 = str_df.apply(lambda x: x.str.contains('24:00')).any().any()
             
-            # (示例代码逻辑)
-            # df['Time'] = df['Time'].str.replace('24:00', '00:00') ...
-            # df['FullTime'] = pd.to_datetime(...) 
+            # 统一替换 '24:00' 为 '00:00' (次日) 以便计算
+            # 注意：必须作用于整个 DataFrame 以防遗漏
+            df = df.replace({'24:00': '00:00', '24:00:00': '00:00:00'}, regex=True)
             
-            # 2. 全局重采样与插值 (保护尾部)
-            # -------------------------------------------------------
-            # 设置索引: df = df.set_index('FullTime')
-            # 排序: df = df.sort_values()
+            # 尝试转换时间列 (假设第一列是时间)
+            time_col = df.columns[0]
+            df[time_col] = pd.to_datetime(df[time_col])
             
-            # 重采样: df = df.resample('15T').asfreq()
-            # 解释：这时会生成 23:15, 23:30, 23:45 的空行。
+            # --- 2. 核心计算 (重采样 + 插值 + 补全) ---
+            df = df.set_index(time_col).sort_index()
             
-            # 插值: df = df.interpolate(method='linear')
-            # 解释：因为保留了次日00:00这个点，interpolate 才能算出 23:xx 的值。
+            # Resample 生成骨架 (包含中间缺失的 23:15 等)
+            df = df.resample('15T').asfreq()
             
-            # 补漏: df = df.bfill().ffill()
-            # 解释：双向填充，确保掐头去尾都有值。
+            # 插值 (中间填充)
+            df = df.interpolate(method='linear')
             
-            # 3. 24:00 还原与输出截取
-            # -------------------------------------------------------
-            # df = df.reset_index()
-            # 如果 is_24_style == True:
-            #    a. 格式化为字符串: %H:%M
-            #    b. 找到所有 "00:00" 的行。
-            #    c. 逻辑判断：如果是序列的最后一行，或者原来的日期变了，
-            #       将其强制替换回 "24:00"。
-            #    d. (可选) 如果用户只需要到24:00，确保切片时包含这一行。
+            # 【关键】双向填充 (修复 00:15 头部丢失 和 23:45 尾部丢失)
+            # bfill 修复头部，ffill 修复尾部(如果插值未能覆盖到最后)
+            df = df.bfill().ffill()
             
+            # --- 3. 24:00 还原与格式化 ---
+            df = df.reset_index()
+            
+            if has_24:
+                # 格式化为字符串
+                df[time_col] = df[time_col].dt.strftime('%H:%M')
+                
+                # 暴力修正逻辑：
+                # 如果最后一行是 '00:00'，将其改为 '24:00'
+                # 这是一个安全的假设，因为重采样后的最后一行通常是结束时间
+                if df.iloc[-1][time_col] == '00:00':
+                    df.at[df.index[-1], time_col] = '24:00'
+                    
             return df
-            
-        explanation = "已执行‘锚点保护’策略：保留了次日00:00作为插值终点，成功计算出23:15-23:45的数值，并最终还原为24:00格式。"
+
+        explanation = "1. 执行15分钟重采样。2. 使用线性插值填充中间值。3. 使用双向填充(bfill/ffill)确保00:15和23:45不丢失。4. 将结尾的00:00还原为24:00。"
         """
 
         messages = [
@@ -282,6 +292,7 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
 
