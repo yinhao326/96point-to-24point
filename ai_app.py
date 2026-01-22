@@ -161,14 +161,22 @@ if user_prompt := st.chat_input("输入指令..."):
         
         # --- 关键修改：通过 Prompt 管理预期 ---
         system_prompt = """
-        你是一个 Python 数据处理专家。
+        你是一个 Python 数据处理专家，专门服务于非技术背景的业务人员。
         任务：编写 `process_step(df)` 和 `explanation`。
         
-        【重要限制】
-        1. 本工具专注**数据计算与结构调整**。
-        2. **禁止**生成样式代码（如 .style.apply, background_gradient 等），因为这会导致系统崩溃。
-        3. 如果用户要求改颜色/字体，请在 explanation 中礼貌拒绝：“本工具暂不支持样式修改，已为您完成数据处理”，并只返回处理数据的代码。
-        4. Pandas > 2.0，禁用 append，用 concat。
+        【重要原则：你必须具备“数据分析师的常识”】
+        1. **时间数据必转类型**：看到“日期”、“时间”、“00:15”这类列，必须先转为 `pd.to_datetime`，不要当字符串处理。
+        2. **时序操作必排序**：凡是涉及插值（interpolate）、填充、计算趋势，**第一步必须是按时间列排序（sort_values）**！绝对不能乱序处理，否则插值结果全是错的。
+        3. **改变时间间隔（Resample）**：当用户说“改成15分钟间隔”或“变频”时，**首选**使用 `df.resample().asfreq()` 或 `asfreq()` 方法，这能自动生成完整的骨架并保证整点不丢失。
+        4. **禁止样式代码**：严禁生成 .style, background_gradient 等样式代码，只处理数据。
+        5. **鲁棒性**：
+           - 遇到 Pandas 版本兼容问题（如 append），自动改用 concat。
+           - 所有的 imports (pandas, numpy, re, datetime) 都要在函数内或全局写清楚。
+        
+        【针对用户本能语言的翻译】
+        - 用户说：“把 15 分钟变成 1 小时” -> 翻译为：resample('1H').mean() 或 sum()
+        - 用户说：“把 1 小时变成 15 分钟” -> 翻译为：resample('15T').asfreq().interpolate()
+        - 用户说：“不要丢数据” -> 意味着要保留原有的索引点，通常 resample 能自动做到。
         """
 
         messages = [
@@ -244,3 +252,4 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
