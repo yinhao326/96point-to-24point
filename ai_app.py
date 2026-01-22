@@ -169,60 +169,61 @@ if user_prompt := st.chat_input("输入指令..."):
         import numpy as np
         
         def process_step(df):
-            # 1. 24:00 预处理 (标准化锚点)
+            # 1. 预处理：识别 24:00 并防止排序错乱
             df = df.astype(str)
-            has_24 = df.apply(lambda x: x.str.contains('24:00')).any().any()
-            # 将 24:00 替换为 次日00:00 以便计算
+            time_col = df.columns[0]
+            
+            # 记录最后一行是否是 24:00 (作为后续加一天的依据)
+            last_time_str = df.iloc[-1][time_col]
+            is_last_24 = '24:00' in str(last_time_str)
+            
+            # 统一替换 24:00 -> 00:00
             df = df.replace({'24:00': '00:00', '24:00:00': '00:00:00'}, regex=True)
             
-            # 转时间格式
-            time_col = df.columns[0]
+            # 转换为 datetime
             df[time_col] = pd.to_datetime(df[time_col])
-            df = df.set_index(time_col).sort_index()
             
-            # 2. 强制构建标准时间轴 (Reindex)
-            # 核心逻辑：无论原始数据从几点开始，强制生成从 "当天 00:15" 到 "结束时间" 的骨架
+            # 【核心修复逻辑】
+            # 如果原始最后一行是 24:00，转换后它变成了当天的 00:00。
+            # 必须立刻给它 +1 天，防止它在排序时跑第一行去。
+            if is_last_24:
+                # 只有当它确实变成了比前一行小的时间(发生了倒流)才加，或者强制加
+                # 这里强制给最后一行加一天，确保它是终点
+                df.at[df.index[-1], time_col] = df.iloc[-1][time_col] + pd.Timedelta(days=1)
             
-            # 获取数据所属的“日期”（取第一个时间点的日期部分）
+            # 2. 设置索引并构建时间轴
+            df = df.set_index(time_col)
+            
+            # 此时再排序，00:00(次日) 就会稳稳地待在最后
+            df = df.sort_index()
+            
+            # 获取当天的日期基准 (取第一个点的日期)
             base_date = df.index[0].floor('D')
             
-            # 设定强制起点：当天的 00:15
-            force_start = base_date + pd.Timedelta(minutes=15)
+            # 强制设定起点为 00:15
+            start_target = base_date + pd.Timedelta(minutes=15)
+            # 终点就是我们刚刚修正过的最后一行 (即次日00:00)
+            end_target = df.index[-1]
             
-            # 设定终点：原始数据的最后时间（通常是次日00:00）
-            current_end = df.index[-1]
-            
-            # 如果原始数据的终点比 00:15 还早（极少见），则至少保证到终点
-            final_end = max(force_start, current_end)
-            
-            # 生成完整的时间网格 (96点模式)
-            full_grid = pd.date_range(start=force_start, end=final_end, freq='15T')
-            
-            # 重新索引：
-            # - 如果是完整数据，这里完全匹配，无变化。
-            # - 如果是残缺数据(01:00起)，这里会自动生成 00:15-00:45 的空行。
+            # 3. 强制 Reindex (生成 96 个点)
+            # 生成从 00:15 到 次日00:00 的完整序列
+            full_grid = pd.date_range(start=start_target, end=end_target, freq='15T')
             df = df.reindex(full_grid)
             
-            # 3. 智能填充
-            # 线性插值处理中间断档
+            # 4. 插值与填充
             df = df.interpolate(method='linear')
-            
-            # bfill 处理头部缺失 (比如 00:15-01:00 的空行，会用 01:00 的值回填)
-            # ffill 处理尾部可能的小数点漂移
             df = df.bfill().ffill()
             
-            # 4. 24:00 还原
+            # 5. 格式还原
             df = df.reset_index()
             df.rename(columns={'index': time_col}, inplace=True)
             df[time_col] = df[time_col].dt.strftime('%H:%M')
             
-            # 仅修复最后一行，且仅当原始数据包含24点风格时
-            if has_24 and df.iloc[-1][time_col] == '00:00':
+            # 如果最后一行现在显示为 00:00，且原本就是 24:00 结尾，把它改回去
+            if is_last_24 and df.iloc[-1][time_col] == '00:00':
                 df.at[df.index[-1], time_col] = '24:00'
                 
             return df
-
-        explanation = "Executed standard time-grid alignment (00:15 start). 1. Reindexed data to ensure all 15-min slots exist. 2. Filled gaps via interpolation and back-filling. 3. Preserved 24:00 formatting."
         """
 
         messages = [
@@ -298,6 +299,7 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
 
