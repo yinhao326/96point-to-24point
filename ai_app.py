@@ -161,62 +161,68 @@ if user_prompt := st.chat_input("输入指令..."):
         
         # --- 关键修改：通过 Prompt 管理预期 ---
         system_prompt = """
-        你是一个 Python 代码生成机器。
-        
-        【最高指令：输出格式严格限制】
-        1. **严禁**输出 markdown 标记（不要写 ```python）。
-        2. **严禁**在代码前输出任何文字（如“好的”、“代码如下”）。
-        3. **严禁**在代码后输出任何文字。
-        4. **只输出** Python 代码文本。
-        
-        【代码逻辑要求 (Process_Step 函数)】
+        You are a Python coding machine. 
+        Output ONLY valid Python code. 
+        NO markdown. NO text explanation.
         
         import pandas as pd
         import numpy as np
         
         def process_step(df):
-            # --- 1. 强力清洗与锚点保护 ---
-            # 检查是否有 '24:00' 格式
-            str_df = df.astype(str)
-            has_24 = str_df.apply(lambda x: x.str.contains('24:00')).any().any()
-            
-            # 统一替换 '24:00' 为 '00:00' (次日) 以便计算
-            # 注意：必须作用于整个 DataFrame 以防遗漏
+            # 1. 24:00 预处理 (标准化锚点)
+            df = df.astype(str)
+            has_24 = df.apply(lambda x: x.str.contains('24:00')).any().any()
+            # 将 24:00 替换为 次日00:00 以便计算
             df = df.replace({'24:00': '00:00', '24:00:00': '00:00:00'}, regex=True)
             
-            # 尝试转换时间列 (假设第一列是时间)
+            # 转时间格式
             time_col = df.columns[0]
             df[time_col] = pd.to_datetime(df[time_col])
-            
-            # --- 2. 核心计算 (重采样 + 插值 + 补全) ---
             df = df.set_index(time_col).sort_index()
             
-            # Resample 生成骨架 (包含中间缺失的 23:15 等)
-            df = df.resample('15T').asfreq()
+            # 2. 强制构建标准时间轴 (Reindex)
+            # 核心逻辑：无论原始数据从几点开始，强制生成从 "当天 00:15" 到 "结束时间" 的骨架
             
-            # 插值 (中间填充)
+            # 获取数据所属的“日期”（取第一个时间点的日期部分）
+            base_date = df.index[0].floor('D')
+            
+            # 设定强制起点：当天的 00:15
+            force_start = base_date + pd.Timedelta(minutes=15)
+            
+            # 设定终点：原始数据的最后时间（通常是次日00:00）
+            current_end = df.index[-1]
+            
+            # 如果原始数据的终点比 00:15 还早（极少见），则至少保证到终点
+            final_end = max(force_start, current_end)
+            
+            # 生成完整的时间网格 (96点模式)
+            full_grid = pd.date_range(start=force_start, end=final_end, freq='15T')
+            
+            # 重新索引：
+            # - 如果是完整数据，这里完全匹配，无变化。
+            # - 如果是残缺数据(01:00起)，这里会自动生成 00:15-00:45 的空行。
+            df = df.reindex(full_grid)
+            
+            # 3. 智能填充
+            # 线性插值处理中间断档
             df = df.interpolate(method='linear')
             
-            # 【关键】双向填充 (修复 00:15 头部丢失 和 23:45 尾部丢失)
-            # bfill 修复头部，ffill 修复尾部(如果插值未能覆盖到最后)
+            # bfill 处理头部缺失 (比如 00:15-01:00 的空行，会用 01:00 的值回填)
+            # ffill 处理尾部可能的小数点漂移
             df = df.bfill().ffill()
             
-            # --- 3. 24:00 还原与格式化 ---
+            # 4. 24:00 还原
             df = df.reset_index()
+            df.rename(columns={'index': time_col}, inplace=True)
+            df[time_col] = df[time_col].dt.strftime('%H:%M')
             
-            if has_24:
-                # 格式化为字符串
-                df[time_col] = df[time_col].dt.strftime('%H:%M')
+            # 仅修复最后一行，且仅当原始数据包含24点风格时
+            if has_24 and df.iloc[-1][time_col] == '00:00':
+                df.at[df.index[-1], time_col] = '24:00'
                 
-                # 暴力修正逻辑：
-                # 如果最后一行是 '00:00'，将其改为 '24:00'
-                # 这是一个安全的假设，因为重采样后的最后一行通常是结束时间
-                if df.iloc[-1][time_col] == '00:00':
-                    df.at[df.index[-1], time_col] = '24:00'
-                    
             return df
 
-        explanation = "1. 执行15分钟重采样。2. 使用线性插值填充中间值。3. 使用双向填充(bfill/ffill)确保00:15和23:45不丢失。4. 将结尾的00:00还原为24:00。"
+        explanation = "Executed standard time-grid alignment (00:15 start). 1. Reindexed data to ensure all 15-min slots exist. 2. Filled gaps via interpolation and back-filling. 3. Preserved 24:00 formatting."
         """
 
         messages = [
@@ -292,6 +298,7 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
 
