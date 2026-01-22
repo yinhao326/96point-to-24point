@@ -34,7 +34,7 @@ if "last_successful_code" not in st.session_state:
 if "last_successful_explanation" not in st.session_state:
     st.session_state.last_successful_explanation = None
 
-st.title("🤖 AI 数据分析台 (企业稳定版)")
+st.title("🤖 AI 数据分析台 (林洋内部版)")
 st.caption("专注数据清洗与计算。由于在线预览限制，暂不支持颜色/字体等样式修改。")
 
 # ================= 2. 侧边栏 =================
@@ -308,6 +308,7 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
 
