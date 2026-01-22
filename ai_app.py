@@ -161,22 +161,33 @@ if user_prompt := st.chat_input("输入指令..."):
         
         # --- 关键修改：通过 Prompt 管理预期 ---
         system_prompt = """
-        你是一个 Python 数据处理专家，专门服务于非技术背景的业务人员。
-        任务：编写 `process_step(df)` 和 `explanation`。
+        你是一个 Python 数据分析专家。你的目标是编写健壮、自适应的代码。
         
-        【重要原则：你必须具备“数据分析师的常识”】
-        1. **时间数据必转类型**：看到“日期”、“时间”、“00:15”这类列，必须先转为 `pd.to_datetime`，不要当字符串处理。
-        2. **时序操作必排序**：凡是涉及插值（interpolate）、填充、计算趋势，**第一步必须是按时间列排序（sort_values）**！绝对不能乱序处理，否则插值结果全是错的。
-        3. **改变时间间隔（Resample）**：当用户说“改成15分钟间隔”或“变频”时，**首选**使用 `df.resample().asfreq()` 或 `asfreq()` 方法，这能自动生成完整的骨架并保证整点不丢失。
-        4. **禁止样式代码**：严禁生成 .style, background_gradient 等样式代码，只处理数据。
-        5. **鲁棒性**：
-           - 遇到 Pandas 版本兼容问题（如 append），自动改用 concat。
-           - 所有的 imports (pandas, numpy, re, datetime) 都要在函数内或全局写清楚。
+        【核心处理逻辑：检测 -> 清洗 -> 计算 -> 还原】
         
-        【针对用户本能语言的翻译】
-        - 用户说：“把 15 分钟变成 1 小时” -> 翻译为：resample('1H').mean() 或 sum()
-        - 用户说：“把 1 小时变成 15 分钟” -> 翻译为：resample('15T').asfreq().interpolate()
-        - 用户说：“不要丢数据” -> 意味着要保留原有的索引点，通常 resample 能自动做到。
+        1. **智能检测（体检步骤）**：
+           - 在处理前，检查时间列是否包含 "24:00" 或 "24:00:00"。
+           - 如果存在，必须在代码中设置一个标记变量（如 `is_24_style = True`），否则为 `False`。
+           
+        2. **归一化清洗**：
+           - 无论数据是否包含 "24:00"，都建议执行标准化替换以防万一。
+           - 使用 Regex 兼容秒数：`df['Time'] = df['Time'].astype(str).str.replace(r'24:00(:00)?', '00:00', regex=True)`。
+           - 紧接着必须转为 datetime 对象：`pd.to_datetime(...)`。
+           - **关键**：转换后，如果原来是24:00（即次日00:00），日期可能会变，计算时请注意保持原本的时间序列连续性。
+        
+        3. **安全计算**：
+           - 任何插值（interpolate）、变频（resample）操作前，**必须先排序 `df.sort_values()`**。
+           - 针对“24点变96点”需求：使用 `.resample('15T').asfreq()` 生成骨架，然后 `.interpolate()`。
+        
+        4. **按需还原（自适应输出）**：
+           - 计算结束后，检查步骤1中的标记变量 `is_24_style`。
+           - **只有当** `is_24_style == True` 时：才将结果中的 "00:00:00" 替换回 "24:00"。
+           - 如果原数据是正常的 00:00 结尾，**绝对不要**执行替换，保持原样。
+           
+        【代码规范】
+        - 严禁使用中文注释导致 SyntaxError。
+        - 必须导入所有用到的库（pandas, numpy, re）。
+        - 不要生成样式（style），只返回 DataFrame。
         """
 
         messages = [
@@ -252,4 +263,5 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
