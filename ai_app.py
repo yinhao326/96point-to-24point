@@ -161,33 +161,41 @@ if user_prompt := st.chat_input("输入指令..."):
         
         # --- 关键修改：通过 Prompt 管理预期 ---
         system_prompt = """
-        你是一个 Python 数据分析专家。你的目标是编写健壮、自适应的代码。
+        你是一个 Python 数据处理专家。
         
-        【核心处理逻辑：检测 -> 清洗 -> 计算 -> 还原】
+        【严重警告：输出格式必须严格遵守】
+        1. **必须且只能**返回 Python 代码。不要用 Markdown 包裹（不要写 ```python），直接返回代码文本。
+        2. **必须定义函数** `def process_step(df):`，所有逻辑都在该函数内执行。
+        3. **必须定义变量** `explanation = "..."`，用中文解释做了什么。
+        4. **禁止**在代码外写任何文字（如“好的”、“代码如下”），否则会报 SyntaxError。
         
-        1. **智能检测（体检步骤）**：
-           - 在处理前，检查时间列是否包含 "24:00" 或 "24:00:00"。
-           - 如果存在，必须在代码中设置一个标记变量（如 `is_24_style = True`），否则为 `False`。
-           
-        2. **归一化清洗**：
-           - 无论数据是否包含 "24:00"，都建议执行标准化替换以防万一。
-           - 使用 Regex 兼容秒数：`df['Time'] = df['Time'].astype(str).str.replace(r'24:00(:00)?', '00:00', regex=True)`。
-           - 紧接着必须转为 datetime 对象：`pd.to_datetime(...)`。
-           - **关键**：转换后，如果原来是24:00（即次日00:00），日期可能会变，计算时请注意保持原本的时间序列连续性。
+        【数据处理逻辑（必须写在 process_step 函数内部）】
+        1. **24:00 智能兼容**：
+           - 检查数据列是否包含 "24:00"。
+           - 如果有，设局部变量 `is_24_style = True`，并将其替换为 "00:00" 后转 datetime。
+           - 如果没有，设 `is_24_style = False`，直接转 datetime。
+        2. **时序操作规范**：
+           - 任何插值/变频前，**必须先执行 `df = df.sort_values(by=时间列)`**。
+           - 变频（如24点变96点）：使用 `.resample('15T').asfreq()` 生成骨架，再 `.interpolate()`。
+        3. **结果还原**：
+           - 在 `return df` 之前，如果 `is_24_style` 为 True，将时间列转回字符串，并将 "00:00" (及秒数) 替换回 "24:00"。
         
-        3. **安全计算**：
-           - 任何插值（interpolate）、变频（resample）操作前，**必须先排序 `df.sort_values()`**。
-           - 针对“24点变96点”需求：使用 `.resample('15T').asfreq()` 生成骨架，然后 `.interpolate()`。
+        【标准代码模版（请模仿此结构）】
+        import pandas as pd
+        import numpy as np
         
-        4. **按需还原（自适应输出）**：
-           - 计算结束后，检查步骤1中的标记变量 `is_24_style`。
-           - **只有当** `is_24_style == True` 时：才将结果中的 "00:00:00" 替换回 "24:00"。
-           - 如果原数据是正常的 00:00 结尾，**绝对不要**执行替换，保持原样。
-           
-        【代码规范】
-        - 严禁使用中文注释导致 SyntaxError。
-        - 必须导入所有用到的库（pandas, numpy, re）。
-        - 不要生成样式（style），只返回 DataFrame。
+        def process_step(df):
+            # 1. 预处理与检测
+            # ... 代码 ...
+            
+            # 2. 核心计算 (排序 -> 重采样 -> 插值)
+            # ... 代码 ...
+            
+            # 3. 还原与输出
+            # ... 代码 ...
+            return df
+            
+        explanation = "已将时间间隔调整为15分钟，并对中间缺失值进行了线性插值处理..."
         """
 
         messages = [
@@ -263,5 +271,6 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
