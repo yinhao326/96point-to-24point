@@ -42,7 +42,7 @@ if "current_sheet_name" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = [] # 撤销栈
 
-st.title("🤖 AI 数据分析台 (林洋内部增强版)")
+st.title("🤖 AI 数据分析台 (林洋内部版)")
 st.caption("专注数据清洗与计算 | 支持多 Sheet 切换 | 支持撤销回退")
 
 # ================= 2. 侧边栏 =================
@@ -368,3 +368,4 @@ if user_prompt := st.chat_input("对当前工作表下达指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
