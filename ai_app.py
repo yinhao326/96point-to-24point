@@ -162,77 +162,32 @@ if user_prompt := st.chat_input("输入指令..."):
         # --- 关键修改：通过 Prompt 管理预期 ---
         # --- 16.0 全能通用版 System Prompt (智能+安全) ---
         system_prompt = """
-        You are a Python coding machine. 
-        Output ONLY valid Python code. 
-        NO markdown. NO text explanation.
+        You are an expert Python Data Scientist for the Energy/Power industry.
         
-        import pandas as pd
-        import numpy as np
-
-        def process_step(df):
-            # --- 1. 智能预处理 ---
-            df = df.astype(str)
-            time_col = df.columns[0] # 自动识别第一列为时间
-
-            # 智能检测是否包含 24:00 风格
-            has_24 = df.apply(lambda x: x.str.contains('24:00')).any().any()
-
-            # 统一清理：即使没有24:00，跑一遍replace也没坏处
-            df = df.replace({'24:00': '00:00', '24:00:00': '00:00:00'}, regex=True)
-            df[time_col] = pd.to_datetime(df[time_col])
-
-            # 【核心保护逻辑】仅在检测到24:00风格时启动
-            # 防止 24:00 (原本是终点) 变 00:00 (起点) 导致排序错乱
-            if has_24:
-                last_val = df.iat[-1, 0]
-                # 简单粗暴判断：如果最后一行变成了0点，说明它是原来的24点，给它加一天
-                if last_val.hour == 0 and last_val.minute == 0:
-                    df.iat[-1, 0] = df.iat[-1, 0] + pd.Timedelta(days=1)
-
-            # --- 2. 构建通用时间轴 ---
-            df = df.set_index(time_col).sort_index()
-
-            # 动态获取起止时间
-            # 这里的逻辑兼容性极强：
-            # 如果是24点数据，end_target 已经是加了一天的次日00:00
-            # 如果是普通数据，end_target 就是正常的结束时间
-            start_target = df.index[0]
-            end_target = df.index[-1]
-
-            # 设定目标频率：默认15T，但如果指令要求其他，AI生成的代码应在此处动态调整
-            # 为了通用性，我们设定一个变量，AI根据用户意图修改这个字符串即可
-            # 在此固定模版中，我们暂定 '15T' 满足当前需求，
-            # *但在真正的通用场景下，这里会根据用户 prompt 变为 '30T' 或 '1H'*
-            target_freq = '15T' 
-
-            # 如果用户希望从 00:15 开始 (针对特定业务)，修正 start_target
-            # 这种修正可以保留，因为它对普通数据影响不大（只会补全前面的一点点）
-            if start_target.hour == 0 and start_target.minute > 0:
-                 pass # 保持原样
-            elif start_target.hour >= 1:
-                 # 如果数据从1点开始，强制把起点拉回当天的00:15 (为了满足补全要求)
-                 start_target = start_target.floor('D') + pd.Timedelta(minutes=15)
-
-            # 生成骨架 (Reindex 策略，永不丢失尾部)
-            full_grid = pd.date_range(start=start_target, end=end_target, freq=target_freq)
-            df = df.reindex(full_grid)
-
-            # --- 3. 通用填充 ---
-            df = df.interpolate(method='linear')
-            df = df.bfill().ffill()
-
-            # --- 4. 智能还原 ---
-            df = df.reset_index()
-            df.rename(columns={'index': time_col}, inplace=True)
-            df[time_col] = df[time_col].dt.strftime('%H:%M')
-
-            # 只有当原始数据有24点，且最后一行正好是00:00时，才还原
-            if has_24:
-                # 检查最后一行是否是 "00:00"
-                if df.iat[-1, 0] == '00:00':
-                    df.iat[-1, 0] = '24:00'
-
-            return df
+        【Output Rules - STRICT】
+        1. Output ONLY valid Python code. NO markdown (```). NO text.
+        2. The code MUST contain `def process_step(df):`.
+        3. IGNORE non-data sheets (Smart Guard is active).
+        
+        【Industry Domain Knowledge (CRITICAL)】
+        You must apply the following default logic to ALL user queries unless explicitly told otherwise:
+        
+        1. **Time Representation**: In this domain, a timestamp (e.g., 01:00) represents the **END** of a period, not the start.
+        2. **Resampling/Aggregation**: 
+           - When converting frequency (e.g., 15min -> 1H), you MUST use **right-closed intervals**.
+           - Code pattern: `df.resample('...', closed='right', label='right').mean()` (or sum).
+           - **NEVER** use the default pandas behavior (which is left-closed).
+           - Example: 01:00 hourly mean = average of (00:15, 00:30, 00:45, 01:00).
+        3. **24:00 Handling**:
+           - If '24:00' exists, treat it as the end of the day.
+           - Ensure calculations (like mean) include this 24:00 point correctly in the last interval.
+        
+        【Smart Guard Clause】
+        (Include this at the start of your code)
+        - Check if df is empty or first column is not time-like/string-like. If so, `return df`.
+        
+        【Task】
+        Generate `def process_step(df):` to fulfill the user's natural language request, applying the Industry Knowledge above automatically.
         """
 
         messages = [
@@ -308,6 +263,7 @@ if user_prompt := st.chat_input("输入指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+
 
 
 
