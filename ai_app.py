@@ -1,276 +1,225 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import io
-import re
-import math
-import datetime
-from openai import OpenAI
-import traceback
+import openai
 
-# ================= 配置区域 =================
-if "DEEPSEEK_API_KEY" in st.secrets:
-    API_KEY = st.secrets["DEEPSEEK_API_KEY"]
-else:
-    st.error("请在 Secrets 中配置 DEEPSEEK_API_KEY")
-    st.stop()
+# ==========================================
+# 1. 页面配置与初始化
+# ==========================================
+st.set_page_config(page_title="Excel AI 智能助手 (多表版)", layout="wide")
+st.title("⚡ Excel AI 智能助手 (多表切换 + 撤销)")
 
-BASE_URL = "https://api.deepseek.com"
-client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+# 初始化 Session State
+if 'df' not in st.session_state:
+    st.session_state['df'] = None  # 当前正在编辑的表(Workbench)
+if 'history' not in st.session_state:
+    st.session_state['history'] = []  # 当前表的撤销记录
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = []
+if 'all_sheets' not in st.session_state:
+    st.session_state['all_sheets'] = {} # 存储所有表的最新状态
+if 'current_sheet_name' not in st.session_state:
+    st.session_state['current_sheet_name'] = ""
 
-st.set_page_config(page_title="AI 数据分析台", layout="wide")
-
-# ================= 1. 状态管理 =================
-if "current_df" not in st.session_state:
-    st.session_state.current_df = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [] 
-if "file_hash" not in st.session_state:
-    st.session_state.file_hash = None
-if "macros" not in st.session_state:
-    st.session_state.macros = {} 
-if "last_successful_code" not in st.session_state:
-    st.session_state.last_successful_code = None
-if "last_successful_explanation" not in st.session_state:
-    st.session_state.last_successful_explanation = None
-
-st.title("🤖 AI 数据分析台 (林洋内部版)")
-st.caption("专注数据清洗与计算。由于在线预览限制，暂不支持颜色/字体等样式修改。")
-
-# ================= 2. 侧边栏 =================
+# ==========================================
+# 2. 侧边栏：API、文件上传与【工作表切换】
+# ==========================================
 with st.sidebar:
-    st.header("📂 1. 文件区")
-    uploaded_file = st.file_uploader("上传 Excel", type=["xlsx", "xls"])
+    st.header("⚙️ 设置")
+    api_key = st.text_input("请输入 DeepSeek API Key", type="password")
+    base_url = "https://api.deepseek.com"
     
+    st.markdown("---")
+    uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
+
+    # --- 文件加载逻辑 ---
     if uploaded_file:
-        current_hash = hash(uploaded_file.getvalue())
-        if st.session_state.file_hash != current_hash:
+        # 如果是新文件（或者第一次上传），读取所有表
+        # 这里通过文件名判断是否是新文件，防止刷新导致重读
+        if 'uploaded_filename' not in st.session_state or st.session_state['uploaded_filename'] != uploaded_file.name:
             try:
-                df = pd.read_excel(uploaded_file)
-                st.session_state.current_df = df
-                st.session_state.file_hash = current_hash
-                st.session_state.chat_history = [] 
-                st.session_state.last_successful_code = None
-                st.session_state.chat_history.append({"role": "assistant", "content": "✅ 文件已加载。请下达数据处理指令（如：求和、转置、去重）。"})
-                st.rerun()
+                all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+                st.session_state['all_sheets'] = all_sheets
+                st.session_state['uploaded_filename'] = uploaded_file.name
+                
+                # 默认选中第一个
+                first_sheet = list(all_sheets.keys())[0]
+                st.session_state['current_sheet_name'] = first_sheet
+                st.session_state['df'] = all_sheets[first_sheet].copy()
+                st.session_state['history'] = [] # 清空历史
+                st.session_state['chat_history'] = []
+                
+                st.success(f"已加载: {uploaded_file.name}")
             except Exception as e:
                 st.error(f"读取失败: {e}")
 
-    if st.button("🔥 重置工作区", type="primary"):
-        if uploaded_file:
-            st.session_state.current_df = pd.read_excel(uploaded_file)
-            st.session_state.chat_history = []
-            st.session_state.last_successful_code = None
-            st.rerun()
+    # --- 【核心升级】工作表切换器 ---
+    if st.session_state['all_sheets']:
+        st.markdown("### 📑 选择工作表")
+        sheet_names = list(st.session_state['all_sheets'].keys())
+        
+        # 使用 selectbox 让用户选择
+        selected_sheet = st.selectbox(
+            "当前正在处理：", 
+            options=sheet_names, 
+            index=sheet_names.index(st.session_state['current_sheet_name']) if st.session_state['current_sheet_name'] in sheet_names else 0
+        )
 
-    # 技能库
-    if st.session_state.macros:
-        st.divider()
-        st.header("⚡ 2. 常用功能库")
-        for name, macro_data in st.session_state.macros.items():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                if st.button(f"▶️ {name}", key=f"btn_{name}", use_container_width=True):
-                    # 执行宏
-                    try:
-                        status = st.status(f"执行：{name}...", expanded=True)
-                        current_df = st.session_state.current_df
-                        execution_globals = {"pd": pd, "np": np, "re": re, "math": math, "datetime": datetime}
-                        local_scope = {}
-                        exec(macro_data['code'], execution_globals, local_scope)
-                        
-                        # --- 安全执行封装 ---
-                        result_obj = local_scope['process_step'](current_df.copy())
-                        
-                        # 样式防御
-                        if isinstance(result_obj, pd.io.formats.style.Styler):
-                            new_df = result_obj.data
-                            msg = f"✅ 技能【{name}】执行成功！(已自动过滤不支持的颜色样式)"
-                        else:
-                            new_df = result_obj
-                            msg = f"✅ 技能【{name}】执行成功！"
+        # 🔄 检测切换逻辑
+        if selected_sheet != st.session_state['current_sheet_name']:
+            # 1. 保存旧表的进度 (Save Context)
+            old_name = st.session_state['current_sheet_name']
+            if st.session_state['df'] is not None:
+                st.session_state['all_sheets'][old_name] = st.session_state['df'].copy()
+                st.toast(f"已自动保存 {old_name} 的进度", icon="💾")
+            
+            # 2. 加载新表 (Load Context)
+            st.session_state['current_sheet_name'] = selected_sheet
+            st.session_state['df'] = st.session_state['all_sheets'][selected_sheet].copy()
+            
+            # 3. 清空撤销栈 (因为换表了，历史记录不通用)
+            st.session_state['history'] = []
+            # st.session_state['chat_history'] = [] # 可选：是否清空对话记录，这里不清空为了方便看之前的指令
+            
+            st.rerun() # 强制刷新页面显示新表
 
-                        st.session_state.current_df = new_df
-                        st.session_state.chat_history.append({"role": "assistant", "content": f"{msg}\n> 说明: {macro_data['explanation']}"})
-                        status.update(label="完成", state="complete", expanded=False)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"执行失败: {e}")
-            with col2:
-                if st.button("❌", key=f"del_{name}"):
-                    del st.session_state.macros[name]
-                    st.rerun()
-
-    if st.session_state.current_df is not None:
-        st.divider()
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state.current_df.to_excel(writer, index=True)
-        st.download_button("📥 下载当前结果", data=output.getvalue(), file_name=f"Result_{datetime.datetime.now().strftime('%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# ================= 3. 主界面 =================
-if st.session_state.current_df is None:
-    st.info("👈 请上传 Excel 开始")
-    st.stop()
-
-st.success(f"当前数据: {st.session_state.current_df.shape[0]} 行, {st.session_state.current_df.shape[1]} 列")
-
-with st.expander("📊 数据预览", expanded=True):
-    st.dataframe(st.session_state.current_df.head(5), use_container_width=True)
-
-st.divider()
-
-for message in st.session_state.chat_history:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# 技能保存按钮
-if st.session_state.last_successful_code:
-    with st.container():
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            macro_name = st.text_input("功能命名", placeholder="给刚才的操作起个名", label_visibility="collapsed")
-        with c2:
-            if st.button("💾 保存为常用功能"):
-                if macro_name:
-                    st.session_state.macros[macro_name] = {
-                        "code": st.session_state.last_successful_code,
-                        "explanation": st.session_state.last_successful_explanation
-                    }
-                    st.success("已保存！")
-                    import time
-                    time.sleep(1)
-                    st.rerun()
-
-# ================= 4. 核心引擎 (含安全气囊) =================
-if user_prompt := st.chat_input("输入指令..."):
-    st.session_state.chat_history.append({"role": "user", "content": user_prompt})
-    st.session_state.last_successful_code = None
+# ==========================================
+# 3. 核心功能区：撤销按钮 & 数据预览
+# ==========================================
+if st.session_state['df'] is not None:
     
-    with st.chat_message("user"):
-        st.markdown(user_prompt)
-
-    with st.chat_message("assistant"):
-        status = st.status("🧠 AI 正在处理...", expanded=True)
-        
-        current_df = st.session_state.current_df
-        MAX_RETRIES = 3
-        success = False
-        
-        execution_globals = {"pd": pd, "np": np, "re": re, "math": math, "datetime": datetime}
-        
-        # --- 关键修改：通过 Prompt 管理预期 ---
-        # --- 16.0 全能通用版 System Prompt (智能+安全) ---
-        system_prompt = """
-        You are an expert Python Data Scientist for the Energy/Power industry.
-        
-        【Output Rules - STRICT】
-        1. Output ONLY valid Python code. NO markdown (```). NO text.
-        2. The code MUST contain `def process_step(df):`.
-        3. IGNORE non-data sheets (Smart Guard is active).
-        
-        【Industry Domain Knowledge (CRITICAL)】
-        You must apply the following default logic to ALL user queries unless explicitly told otherwise:
-        
-        1. **Time Representation**: In this domain, a timestamp (e.g., 01:00) represents the **END** of a period, not the start.
-        2. **Resampling/Aggregation**: 
-           - When converting frequency (e.g., 15min -> 1H), you MUST use **right-closed intervals**.
-           - Code pattern: `df.resample('...', closed='right', label='right').mean()` (or sum).
-           - **NEVER** use the default pandas behavior (which is left-closed).
-           - Example: 01:00 hourly mean = average of (00:15, 00:30, 00:45, 01:00).
-        3. **24:00 Handling**:
-           - If '24:00' exists, treat it as the end of the day.
-           - Ensure calculations (like mean) include this 24:00 point correctly in the last interval.
-        
-        【Smart Guard Clause】
-        (Include this at the start of your code)
-        - Check if df is empty or first column is not time-like/string-like. If so, `return df`.
-        
-        【Task】
-        Generate `def process_step(df):` to fulfill the user's natural language request, applying the Industry Knowledge above automatically.
-        """
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"数据预览:\n{current_df.head(2).to_markdown()}\n需求: {user_prompt}"}
-        ]
-
-        for i in range(MAX_RETRIES):
-            try:
-                if i > 0: status.write(f"🔧 第 {i} 次自动修正中...")
+    col1, col2 = st.columns([1, 5])
+    
+    with col1:
+        # 🟢 撤销按钮
+        if st.button("↩️ 撤销上一步", use_container_width=True):
+            if len(st.session_state['history']) > 0:
+                last_df = st.session_state['history'].pop()
+                st.session_state['df'] = last_df
+                if st.session_state['chat_history']:
+                    st.session_state['chat_history'].pop()
                 
-                response = client.chat.completions.create(
-                    model="deepseek-chat", messages=messages, temperature=0.1
-                )
-                code = response.choices[0].message.content.replace("```python", "").replace("```", "").strip()
+                # 同步更新回 all_sheets，确保切换时不丢失撤销后的状态
+                current_name = st.session_state['current_sheet_name']
+                st.session_state['all_sheets'][current_name] = last_df
                 
-                local_scope = {}
-                exec(code, execution_globals, local_scope)
-                
-                if 'process_step' not in local_scope: raise ValueError("函数丢失")
-                if 'explanation' not in local_scope: local_scope['explanation'] = "AI 未提供解释"
-                
-                # 执行处理
-                result_obj = local_scope['process_step'](current_df.copy())
-                
-                # =========== 🛡️ 安全气囊：防样式崩溃系统 ===========
-                warning_note = ""
-                # 检测返回值是不是 Styler (Pandas 的样式对象)
-                if isinstance(result_obj, pd.io.formats.style.Styler):
-                    # 如果是，强制取回纯数据 (.data)
-                    new_df = result_obj.data
-                    warning_note = "\n\n⚠️ **系统提示**：检测到包含颜色/样式指令。为防止系统崩溃，已自动过滤样式，仅保留处理后的数据结果。"
-                elif isinstance(result_obj, pd.DataFrame):
-                    new_df = result_obj
-                else:
-                    raise ValueError(f"AI 返回了不支持的数据类型: {type(result_obj)}")
-                # ===============================================
-                
-                # 成功
-                st.session_state.current_df = new_df
-                st.session_state.last_successful_code = code
-                st.session_state.last_successful_explanation = local_scope['explanation'] + warning_note
-                
-                success = True
-                status.update(label="✅ 执行成功", state="complete", expanded=False)
-                
-                final_response = f"""
-                **🧐 结果说明:**
-                > {st.session_state.last_successful_explanation}
-                """
-                st.markdown(final_response)
-                st.session_state.chat_history.append({"role": "assistant", "content": final_response})
+                st.success("已撤销！")
                 st.rerun()
-                break
+            else:
+                st.warning("已经是原始状态")
+    
+    with col2:
+        st.info(f"正在编辑: **{st.session_state['current_sheet_name']}** | 行数: {st.session_state['df'].shape[0]}")
 
-            except Exception as e:
-                error_info = f"{type(e).__name__}: {str(e)}"
-                status.write(f"❌ 内部尝试错误: {error_info}")
-                messages.append({"role": "assistant", "content": code})
-                messages.append({"role": "user", "content": f"代码执行报错: {error_info}\n请修正。如果是因为尝试使用 .style 或样式功能导致，请去掉样式代码，只处理数据！"})
+    st.dataframe(st.session_state['df'].head(8), use_container_width=True)
+
+# ==========================================
+# 4. AI 处理逻辑 (V18 Industry Logic)
+# ==========================================
+def process_data_with_ai(user_prompt):
+    if not api_key:
+        st.error("请先输入 API Key")
+        return
+
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+    system_prompt = """
+    You are an expert Python Data Scientist for the Energy/Power industry.
+    
+    【Output Rules - STRICT】
+    1. Output ONLY valid Python code. NO markdown. NO text explanation.
+    2. The code MUST contain `def process_step(df):`.
+    
+    【Industry Logic】
+    1. **Time**: 01:00 represents the END of the period.
+    2. **Resampling**: ALWAYS use `df.resample(..., closed='right', label='right')`.
+    3. **24:00**: Treat as end of day.
+    
+    【Smart Guard】
+    - If df is empty or not time-series, return df.
+    
+    【Task】
+    Generate `def process_step(df):` to fulfill the user's request.
+    """
+
+    data_preview = st.session_state['df'].head(5).to_markdown()
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Current Sheet: {st.session_state['current_sheet_name']}\nData Preview:\n{data_preview}\n\nInstruction: {user_prompt}"}
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages,
+            temperature=0.1
+        )
+        return response.choices[0].message.content.replace("```python", "").replace("```", "").strip()
+    except Exception as e:
+        st.error(f"AI Error: {e}")
+        return None
+
+# ==========================================
+# 5. 聊天与执行
+# ==========================================
+if st.session_state['df'] is not None:
+    user_input = st.chat_input(f"对 {st.session_state['current_sheet_name']} 下达指令...")
+
+    if user_input:
+        st.session_state['chat_history'].append({"role": "user", "content": user_input})
         
-        if not success:
-            status.update(label="❌ 无法处理", state="error")
-            # --- 最终兜底：给用户一个体面的台阶 ---
-            fail_msg = """
-            **🤔 抱歉，这个需求有点超出我的能力范围。**
-            
-            可能的原因：
-            1. **涉及复杂的 Excel 样式/颜色**（我目前只能处理数据计算，还不会画画）。
-            2. 数据结构极其特殊，逻辑无法对齐。
-            
-            建议：**简化指令**，例如先只做数据计算，下载后再去 Excel 里调整颜色。
-            """
-            st.error(fail_msg)
-            st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
+        # 1. 备份 (Undo)
+        st.session_state['history'].append(st.session_state['df'].copy(deep=True))
+        
+        # 2. AI 生成
+        with st.spinner("AI 正在处理..."):
+            code = process_data_with_ai(user_input)
+        
+        if code:
+            try:
+                local_vars = {'pd': pd, 'np': pd.numpy}
+                exec(code, local_vars)
+                process_step = local_vars['process_step']
+                
+                # 3. 执行处理
+                new_df = process_step(st.session_state['df'])
+                
+                # 4. 更新当前状态
+                st.session_state['df'] = new_df
+                # 5. 【关键】同步更新到全家福 all_sheets
+                st.session_state['all_sheets'][st.session_state['current_sheet_name']] = new_df
+                
+                st.session_state['chat_history'].append({"role": "assistant", "content": f"✅ {st.session_state['current_sheet_name']} 处理完成！"})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
+                st.session_state['df'] = st.session_state['history'].pop() # 自动回滚
 
+    for msg in st.session_state['chat_history']:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
 
-
-
-
-
-
-
-
-
-
+# ==========================================
+# 6. 下载 (合并所有修改)
+# ==========================================
+if st.session_state['df'] is not None:
+    st.markdown("---")
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 遍历 st.session_state['all_sheets']，把每一张表（无论修没修改）都写进去
+        for name, sheet_df in st.session_state['all_sheets'].items():
+            # 特殊处理：如果是当前正在看的表，用 df (虽然理论上已经同步了，但双重保险)
+            if name == st.session_state['current_sheet_name']:
+                st.session_state['df'].to_excel(writer, sheet_name=name)
+            else:
+                sheet_df.to_excel(writer, sheet_name=name, index=False)
+                
+    st.download_button(
+        label="📥 下载最终结果 (包含所有工作表)",
+        data=output.getvalue(),
+        file_name="final_result.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
