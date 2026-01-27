@@ -144,8 +144,22 @@ with st.sidebar:
                         # --- 安全执行封装 ---
                         result_obj = local_scope['process_step'](current_df.copy())
                         
-                        # 样式防御
-                        if isinstance(result_obj, pd.io.formats.style.Styler):
+                        # --- 版本兼容的 Styler 检查 ---
+                        is_styler = False
+                        try:
+                            # 尝试新版本导入
+                            from pandas.io.formats.style import Styler
+                            is_styler = isinstance(result_obj, Styler)
+                        except ImportError:
+                            try:
+                                # 尝试旧版本导入
+                                from pandas.formats.style import Styler
+                                is_styler = isinstance(result_obj, Styler)
+                            except ImportError:
+                                # 通用检查
+                                is_styler = hasattr(result_obj, 'data') and hasattr(result_obj, 'render')
+                        
+                        if is_styler:
                             new_df = result_obj.data
                             msg = f"✅ 技能【{name}】执行成功！(已自动过滤不支持的颜色样式)"
                         else:
@@ -315,7 +329,22 @@ if user_prompt := st.chat_input("对当前工作表下达指令..."):
                 # =========== 🛡️ 安全气囊：防样式崩溃系统 ===========
                 warning_note = ""
                 # 检测返回值是不是 Styler (Pandas 的样式对象)
-                if isinstance(result_obj, pd.io.formats.style.Styler):
+                # 版本兼容的 Styler 检查
+                is_styler = False
+                try:
+                    # 尝试新版本导入
+                    from pandas.io.formats.style import Styler
+                    is_styler = isinstance(result_obj, Styler)
+                except ImportError:
+                    try:
+                        # 尝试旧版本导入
+                        from pandas.formats.style import Styler
+                        is_styler = isinstance(result_obj, Styler)
+                    except ImportError:
+                        # 通用检查：有 data 和 render 方法的就是 Styler
+                        is_styler = hasattr(result_obj, 'data') and hasattr(result_obj, 'render')
+
+                if is_styler:
                     # 如果是，强制取回纯数据 (.data)
                     new_df = result_obj.data
                     warning_note = "\n\n⚠️ **系统提示**：检测到包含颜色/样式指令。为防止系统崩溃，已自动过滤样式，仅保留处理后的数据结果。"
@@ -368,4 +397,3 @@ if user_prompt := st.chat_input("对当前工作表下达指令..."):
             """
             st.error(fail_msg)
             st.session_state.chat_history.append({"role": "assistant", "content": fail_msg})
-
