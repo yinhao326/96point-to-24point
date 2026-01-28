@@ -1,19 +1,3 @@
-import os
-import sys
-
-# ================= 0. 【V35核心】强力清洗环境变量 =================
-# 解释：Streamlit Cloud 的 Secrets 里可能残留了 HTTP_PROXY 设置
-# 这里我们强制删除它们，确保代码直连 Google
-proxy_keys = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "CURL_CA_BUNDLE"]
-for key in proxy_keys:
-    if key in os.environ:
-        print(f"检测到残留代理设置 {key}={os.environ[key]}，正在删除...")
-        del os.environ[key]
-
-# 强制指定不使用代理 (双重保险)
-os.environ["NO_PROXY"] = "*"
-
-# ================= 1. 正常导入 =================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,9 +8,12 @@ import datetime
 # 引入新版 SDK
 from google import genai
 
-# ================= 2. 配置与初始化 =================
+# ================= 0. 配置与初始化 =================
 
-st.set_page_config(page_title="AI 能源分析台 (Cloud V35)", layout="wide")
+st.set_page_config(page_title="AI 能源分析台 (Cloud版)", layout="wide")
+
+# ❌ 删除所有 os.environ 设置代理的代码
+# Streamlit Cloud 在海外，直连 Google，不需要代理！
 
 # 检查 API Key
 if "GEMINI_API_KEY" in st.secrets:
@@ -37,46 +24,52 @@ else:
 
 # 初始化客户端
 try:
-    # 纯净初始化
+    # 纯净初始化，不带任何 proxy 参数
     client = genai.Client(
         api_key=api_key,
-        http_options={
-            "timeout": 60000, 
-            # 显式告诉 SDK 不要查找系统代理
-            "proxy": None 
-        }
+        http_options={"timeout": 60000} # 只保留超时设置
     )
 except Exception as e:
-    # 这种初始化错误极少发生，如果发生通常是库版本问题
     st.error(f"无法初始化客户端: {e}")
     st.stop()
 
-# ================= 3. 核心工具函数 =================
+# ================= 1. 核心工具函数 =================
 
 def clean_energy_time(series):
-    """【能源行业时间清洗器】解决 '24:00' 问题"""
+    """
+    【能源行业时间清洗器】解决 '24:00' 问题
+    """
     def parse_single_val(val):
         s_val = str(val).strip()
         if "24:00" in s_val:
             temp_s = s_val.replace("24:00", "00:00")
             try:
                 dt = pd.to_datetime(temp_s)
-                if len(s_val) > 8: return dt + pd.Timedelta(days=1)
+                if len(s_val) > 8: 
+                    return dt + pd.Timedelta(days=1)
                 return dt
-            except: return pd.NaT
+            except:
+                return pd.NaT
         else:
-            try: return pd.to_datetime(val)
-            except: return pd.NaT
+            try:
+                return pd.to_datetime(val)
+            except:
+                return pd.NaT
 
-    try: return pd.to_datetime(series)
-    except: return series.apply(parse_single_val)
+    try:
+        return pd.to_datetime(series)
+    except:
+        return series.apply(parse_single_val)
 
-# ================= 4. 全局状态管理 =================
-if "chat_history" not in st.session_state: st.session_state.chat_history = []
-if "current_df" not in st.session_state: st.session_state.current_df = None
-if "file_hash" not in st.session_state: st.session_state.file_hash = None
+# ================= 2. 全局状态管理 =================
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "current_df" not in st.session_state:
+    st.session_state.current_df = None
+if "file_hash" not in st.session_state:
+    st.session_state.file_hash = None
 
-# ================= 5. 侧边栏 =================
+# ================= 3. 侧边栏 =================
 with st.sidebar:
     st.title("🧠 设置")
     
@@ -84,8 +77,10 @@ with st.sidebar:
     model_options = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
     selected_model = st.selectbox("选择模型引擎：", model_options, index=0)
     
-    st.success("☁️ 云端环境：强制直连模式 (V35)")
+    st.success("☁️ 云端环境：已自动直连 Google")
 
+    st.divider()
+    st.header("📂 文件上传")
     uploaded_file = st.file_uploader("上传 Excel/CSV", type=["xlsx", "xls", "csv"])
     
     if uploaded_file:
@@ -100,7 +95,7 @@ with st.sidebar:
                 st.session_state.file_hash = current_hash
                 st.session_state.chat_history = [{
                     "role": "assistant", 
-                    "content": f"✅ **{uploaded_file.name}** 加载成功！\n请下达指令。"
+                    "content": f"✅ **{uploaded_file.name}** 加载成功！(引擎: {selected_model})\n请告诉我怎么处理数据。"
                 }]
                 st.rerun()
             except Exception as e:
@@ -116,23 +111,25 @@ with st.sidebar:
         st.divider()
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
-            st.session_state.current_df.to_excel(writer, index=False)
+            st.session_state.current_df.to_excel(writer, index=False) # 这里的 index=False 视情况而定
         st.download_button("📥 下载结果", out.getvalue(), "Result.xlsx", use_container_width=True)
 
-# ================= 6. 主界面 =================
-st.title("⚡ AI 能源数据分析台 (Cloud V35)")
+# ================= 4. 主界面 =================
+st.title("⚡ AI 能源数据分析台 (Cloud V34)")
 
 if st.session_state.current_df is None:
     st.info("👈 请先在左侧上传文件")
     st.stop()
 
+# 数据预览
 with st.expander("📊 数据预览 (Top 5)", expanded=True):
     st.dataframe(st.session_state.current_df.head(5), use_container_width=True)
 
+# 聊天记录
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# ================= 7. Gemini 核心引擎 =================
+# ================= 5. Gemini 核心引擎 =================
 
 if user_prompt := st.chat_input("请输入指令..."):
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
@@ -163,7 +160,7 @@ if user_prompt := st.chat_input("请输入指令..."):
             4. Assume necessary libraries (pd, np, re) are imported.
             """
             
-            status.write("正在请求 Google API (已清除代理)...")
+            status.write("正在请求 Google API (Cloud Direct)...")
             
             # 调用生成 API
             response = client.models.generate_content(
@@ -173,6 +170,7 @@ if user_prompt := st.chat_input("请输入指令..."):
             
             # 提取代码
             raw_code = response.text
+            # 简单的代码提取逻辑
             if "```python" in raw_code:
                 cleaned_code = raw_code.split("```python")[1].split("```")[0].strip()
             elif "```" in raw_code:
@@ -180,7 +178,7 @@ if user_prompt := st.chat_input("请输入指令..."):
             else:
                 cleaned_code = raw_code.strip()
             
-            status.write("正在执行代码...")
+            status.write("正在执行生成的代码...")
             
             # 执行环境
             execution_globals = {
@@ -193,6 +191,7 @@ if user_prompt := st.chat_input("请输入指令..."):
             
             if 'process_step' in local_scope:
                 new_df = local_scope['process_step'](st.session_state.current_df.copy())
+                
                 st.session_state.current_df = new_df
                 status.update(label="✅ 执行成功", state="complete", expanded=False)
                 
@@ -207,4 +206,3 @@ if user_prompt := st.chat_input("请输入指令..."):
         except Exception as e:
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
-            st.info("💡 如果依然报错，请检查 Streamlit Cloud 后台 Secrets 是否配置了多余的代理参数。")
