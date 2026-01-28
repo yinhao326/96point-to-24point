@@ -1,14 +1,3 @@
-# ================= 0. 必须放在代码的第一行！ =================
-import os
-
-# 强制设置代理 (针对你的端口 7897)
-# 注意：一定要在 import streamlit 或 google 之前设置
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7897"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
-# 禁用 SSL 验证 (可选，防止有些代理证书报错，建议加上)
-os.environ["CURL_CA_BUNDLE"] = ""
-
-# ================= 1. 正常的库导入 =================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,34 +7,33 @@ import math
 import datetime
 # 引入新版 SDK
 from google import genai
-from google.genai import types
 
-# ================= 2. 配置与初始化 =================
+# ================= 0. 配置与初始化 =================
 
-st.set_page_config(page_title="AI 能源分析台 (Gemini Pro)", layout="wide")
+st.set_page_config(page_title="AI 能源分析台 (Cloud版)", layout="wide")
+
+# ❌ 删除所有 os.environ 设置代理的代码
+# Streamlit Cloud 在海外，直连 Google，不需要代理！
 
 # 检查 API Key
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
 else:
-    st.error("❌ 未检测到 API Key。请在 .streamlit/secrets.toml 中配置 GEMINI_API_KEY")
+    st.error("❌ 未检测到 API Key。请在 Streamlit Cloud 控制台的 Secrets 中配置 GEMINI_API_KEY")
     st.stop()
 
-# 初始化新版客户端
+# 初始化客户端
 try:
-    # 修正：这里不再传 proxy 参数，改为只传 timeout
-    # 代理会通过最上面的 os.environ 自动生效
+    # 纯净初始化，不带任何 proxy 参数
     client = genai.Client(
         api_key=api_key,
-        http_options={
-            "timeout": 60000  # 设置 60秒超时
-        }
+        http_options={"timeout": 60000} # 只保留超时设置
     )
 except Exception as e:
     st.error(f"无法初始化客户端: {e}")
     st.stop()
 
-# ================= 3. 核心工具函数 =================
+# ================= 1. 核心工具函数 =================
 
 def clean_energy_time(series):
     """
@@ -73,26 +61,23 @@ def clean_energy_time(series):
     except:
         return series.apply(parse_single_val)
 
-# ================= 4. 全局状态管理 =================
-keys = ["current_df", "chat_history", "file_hash", 
-        "last_successful_code", "all_sheets", "current_sheet_name", "history"]
+# ================= 2. 全局状态管理 =================
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "current_df" not in st.session_state:
+    st.session_state.current_df = None
+if "file_hash" not in st.session_state:
+    st.session_state.file_hash = None
 
-for key in keys:
-    if key not in st.session_state:
-        if key == "all_sheets": st.session_state[key] = {}
-        elif key in ["chat_history", "history"]: st.session_state[key] = []
-        elif key == "current_sheet_name": st.session_state[key] = ""
-        else: st.session_state[key] = None
-
-# ================= 5. 侧边栏 =================
+# ================= 3. 侧边栏 =================
 with st.sidebar:
     st.title("🧠 设置")
     
-    # 硬编码模型列表，防止 API 连接不稳定导致列表加载失败
+    # 硬编码模型列表
     model_options = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
     selected_model = st.selectbox("选择模型引擎：", model_options, index=0)
     
-    st.info(f"🌐 代理状态: 代码强制指向 7897 (Env)")
+    st.success("☁️ 云端环境：已自动直连 Google")
 
     st.divider()
     st.header("📂 文件上传")
@@ -103,89 +88,63 @@ with st.sidebar:
         if st.session_state.file_hash != current_hash:
             try:
                 if uploaded_file.name.endswith('.csv'):
-                    all_sheets = {'Sheet1': pd.read_csv(uploaded_file)}
+                    st.session_state.current_df = pd.read_csv(uploaded_file)
                 else:
-                    all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+                    st.session_state.current_df = pd.read_excel(uploaded_file)
                 
-                st.session_state.all_sheets = all_sheets
                 st.session_state.file_hash = current_hash
-                first_sheet = list(all_sheets.keys())[0]
-                st.session_state.current_sheet_name = first_sheet
-                st.session_state.current_df = all_sheets[first_sheet].copy()
-                st.session_state.chat_history = [] 
-                st.session_state.history = [] 
-                
-                st.session_state.chat_history.append({
+                st.session_state.chat_history = [{
                     "role": "assistant", 
-                    "content": f"✅ **{uploaded_file.name}** 加载成功！(引擎: {selected_model})\n代理已配置，请告诉我怎么处理数据。"
-                })
+                    "content": f"✅ **{uploaded_file.name}** 加载成功！(引擎: {selected_model})\n请告诉我怎么处理数据。"
+                }]
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 读取失败: {e}")
 
-    # Sheet 切换
-    if st.session_state.all_sheets:
-        st.divider()
-        sheet_names = list(st.session_state.all_sheets.keys())
-        try: curr_idx = sheet_names.index(st.session_state.current_sheet_name)
-        except: curr_idx = 0
-        sel_sheet = st.selectbox("当前工作表", sheet_names, index=curr_idx)
-        if sel_sheet != st.session_state.current_sheet_name:
-            st.session_state.current_sheet_name = sel_sheet
-            st.session_state.current_df = st.session_state.all_sheets[sel_sheet].copy()
-            st.rerun()
-            
     if st.button("🔥 重置工作区", type="primary", use_container_width=True):
         st.session_state.file_hash = None
+        st.session_state.current_df = None
+        st.session_state.chat_history = []
         st.rerun()
 
     if st.session_state.current_df is not None:
         st.divider()
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
-            st.session_state.current_df.to_excel(writer, index=True)
+            st.session_state.current_df.to_excel(writer, index=False) # 这里的 index=False 视情况而定
         st.download_button("📥 下载结果", out.getvalue(), "Result.xlsx", use_container_width=True)
 
-# ================= 6. 主界面 =================
-st.title("⚡ AI 能源数据分析台 (V32)")
+# ================= 4. 主界面 =================
+st.title("⚡ AI 能源数据分析台 (Cloud V34)")
 
 if st.session_state.current_df is None:
     st.info("👈 请先在左侧上传文件")
     st.stop()
 
-c1, c2 = st.columns([1, 6])
-with c1: 
-    if st.button("↩️ 撤销"):
-        if st.session_state.history:
-            st.session_state.current_df = st.session_state.history.pop()
-            st.rerun()
-with c2: 
-    row_count, col_count = st.session_state.current_df.shape
-    st.success(f"数据维度: {row_count} 行 × {col_count} 列")
-
+# 数据预览
 with st.expander("📊 数据预览 (Top 5)", expanded=True):
     st.dataframe(st.session_state.current_df.head(5), use_container_width=True)
 
+# 聊天记录
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# ================= 7. Gemini 新版核心引擎 =================
+# ================= 5. Gemini 核心引擎 =================
 
 if user_prompt := st.chat_input("请输入指令..."):
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
-    st.session_state.history.append(st.session_state.current_df.copy())
     with st.chat_message("user"): st.markdown(user_prompt)
     
     with st.chat_message("assistant"):
-        status = st.status("✨ Gemini 正在连接...", expanded=True)
+        status = st.status("✨ AI 正在思考...", expanded=True)
         
         try:
             # 准备 Prompt
-            df_sample = st.session_state.current_df.head(10).to_markdown()
+            df_sample = st.session_state.current_df.head(5).to_markdown()
             df_dtypes = str(st.session_state.current_df.dtypes)
             
             prompt = f"""
-            You are an expert Python Data Analyst in the Energy sector.
+            You are an expert Python Data Analyst.
             
             【Data Context】
             {df_sample}
@@ -195,13 +154,13 @@ if user_prompt := st.chat_input("请输入指令..."):
             {user_prompt}
             
             【Requirements】
-            1. Return ONLY a valid Python code block.
-            2. The code must define a function `def process_step(df):`.
-            3. Use `clean_energy_time(series)` if you need to parse times like "24:00".
-            4. Handle wide format (dates in columns) if detected.
+            1. Return ONLY valid Python code inside ```python blocks.
+            2. Define a function `def process_step(df):` that returns the modified dataframe.
+            3. Use `clean_energy_time(series)` for date parsing if needed.
+            4. Assume necessary libraries (pd, np, re) are imported.
             """
             
-            status.write("正在发送请求到 Google (via Proxy)...")
+            status.write("正在请求 Google API (Cloud Direct)...")
             
             # 调用生成 API
             response = client.models.generate_content(
@@ -211,9 +170,15 @@ if user_prompt := st.chat_input("请输入指令..."):
             
             # 提取代码
             raw_code = response.text
-            cleaned_code = raw_code.replace("```python", "").replace("```", "").strip()
+            # 简单的代码提取逻辑
+            if "```python" in raw_code:
+                cleaned_code = raw_code.split("```python")[1].split("```")[0].strip()
+            elif "```" in raw_code:
+                cleaned_code = raw_code.split("```")[1].split("```")[0].strip()
+            else:
+                cleaned_code = raw_code.strip()
             
-            status.write("代码生成完毕，正在执行...")
+            status.write("正在执行生成的代码...")
             
             # 执行环境
             execution_globals = {
@@ -231,7 +196,6 @@ if user_prompt := st.chat_input("请输入指令..."):
                 status.update(label="✅ 执行成功", state="complete", expanded=False)
                 
                 result_msg = f"✅ 处理完成。结果形状: {new_df.shape}"
-                st.markdown(result_msg)
                 st.session_state.chat_history.append({"role": "assistant", "content": result_msg})
                 st.rerun()
             else:
@@ -242,4 +206,3 @@ if user_prompt := st.chat_input("请输入指令..."):
         except Exception as e:
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
-            st.warning("如果依然报 Connection Refused，请尝试下方的【终极方案】")
