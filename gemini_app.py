@@ -1,3 +1,14 @@
+# ================= 0. 必须放在代码的第一行！ =================
+import os
+
+# 强制设置代理 (针对你的端口 7897)
+# 注意：一定要在 import streamlit 或 google 之前设置
+os.environ["HTTP_PROXY"] = "http://127.0.0.1:7897"
+os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
+# 禁用 SSL 验证 (可选，防止有些代理证书报错，建议加上)
+os.environ["CURL_CA_BUNDLE"] = ""
+
+# ================= 1. 正常的库导入 =================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,19 +16,13 @@ import io
 import re
 import math
 import datetime
-import os
-# 1. 引入新版 SDK
+# 引入新版 SDK
 from google import genai
+from google.genai import types
 
-# ================= 0. 核心网络配置 (最关键一步) =================
-# 根据你的截图，你的代理端口是 7897
-# 这两行代码必须放在所有网络请求之前
-os.environ["HTTP_PROXY"] = "http://127.0.0.1:7897"
-os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
+# ================= 2. 配置与初始化 =================
 
-# ================= 1. 配置与初始化 =================
-
-st.set_page_config(page_title="AI 能源分析台 (Gemini V30)", layout="wide")
+st.set_page_config(page_title="AI 能源分析台 (Gemini Pro)", layout="wide")
 
 # 检查 API Key
 if "GEMINI_API_KEY" in st.secrets:
@@ -28,19 +33,19 @@ else:
 
 # 初始化新版客户端
 try:
-    # 【强制指定代理】直接告诉 SDK 走这个通道，不再依赖环境变量
+    # 修正：这里不再传 proxy 参数，改为只传 timeout
+    # 代理会通过最上面的 os.environ 自动生效
     client = genai.Client(
         api_key=api_key,
         http_options={
-            "proxy": "http://127.0.0.1:7897",  # <--- 显式指定，解决 Connection Refused
-            "timeout": 60000, # 顺便设置个长一点的超时(毫秒)
+            "timeout": 60000  # 设置 60秒超时
         }
     )
 except Exception as e:
-    st.error(f"无法初始化客户端，请检查代理设置: {e}")
+    st.error(f"无法初始化客户端: {e}")
     st.stop()
 
-# ================= 2. 核心工具函数 =================
+# ================= 3. 核心工具函数 =================
 
 def clean_energy_time(series):
     """
@@ -68,7 +73,7 @@ def clean_energy_time(series):
     except:
         return series.apply(parse_single_val)
 
-# ================= 3. 全局状态管理 =================
+# ================= 4. 全局状态管理 =================
 keys = ["current_df", "chat_history", "file_hash", 
         "last_successful_code", "all_sheets", "current_sheet_name", "history"]
 
@@ -79,15 +84,15 @@ for key in keys:
         elif key == "current_sheet_name": st.session_state[key] = ""
         else: st.session_state[key] = None
 
-# ================= 4. 侧边栏 =================
+# ================= 5. 侧边栏 =================
 with st.sidebar:
     st.title("🧠 设置")
     
-    # 新版 SDK 的模型名称通常不需要 'models/' 前缀，但为了保险我们使用完整名称
+    # 硬编码模型列表，防止 API 连接不稳定导致列表加载失败
     model_options = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
     selected_model = st.selectbox("选择模型引擎：", model_options, index=0)
     
-    st.info(f"🌐 代理状态: 已强制指向 127.0.0.1:7897")
+    st.info(f"🌐 代理状态: 代码强制指向 7897 (Env)")
 
     st.divider()
     st.header("📂 文件上传")
@@ -112,7 +117,7 @@ with st.sidebar:
                 
                 st.session_state.chat_history.append({
                     "role": "assistant", 
-                    "content": f"✅ **{uploaded_file.name}** 加载成功！(引擎: {selected_model})\n代理已连接，请告诉我怎么处理数据。"
+                    "content": f"✅ **{uploaded_file.name}** 加载成功！(引擎: {selected_model})\n代理已配置，请告诉我怎么处理数据。"
                 })
                 st.rerun()
             except Exception as e:
@@ -141,8 +146,8 @@ with st.sidebar:
             st.session_state.current_df.to_excel(writer, index=True)
         st.download_button("📥 下载结果", out.getvalue(), "Result.xlsx", use_container_width=True)
 
-# ================= 5. 主界面 =================
-st.title("⚡ AI 能源数据分析台 (V30)")
+# ================= 6. 主界面 =================
+st.title("⚡ AI 能源数据分析台 (V32)")
 
 if st.session_state.current_df is None:
     st.info("👈 请先在左侧上传文件")
@@ -164,7 +169,7 @@ with st.expander("📊 数据预览 (Top 5)", expanded=True):
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# ================= 6. Gemini 新版核心引擎 =================
+# ================= 7. Gemini 新版核心引擎 =================
 
 if user_prompt := st.chat_input("请输入指令..."):
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
@@ -196,9 +201,9 @@ if user_prompt := st.chat_input("请输入指令..."):
             4. Handle wide format (dates in columns) if detected.
             """
             
-            # 【核心修改】新版 SDK 调用方式
-            status.write("正在发送请求到 Google (via Proxy 7897)...")
+            status.write("正在发送请求到 Google (via Proxy)...")
             
+            # 调用生成 API
             response = client.models.generate_content(
                 model=selected_model,
                 contents=prompt
@@ -237,5 +242,4 @@ if user_prompt := st.chat_input("请输入指令..."):
         except Exception as e:
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
-            st.info("提示：如果提示连接超时，请检查你的 VPN 是否开启，且端口是否确实为 7897")
-
+            st.warning("如果依然报 Connection Refused，请尝试下方的【终极方案】")
