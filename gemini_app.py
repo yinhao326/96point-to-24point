@@ -28,7 +28,14 @@ else:
 
 # 初始化新版客户端
 try:
-    client = genai.Client(api_key=api_key)
+    # 【强制指定代理】直接告诉 SDK 走这个通道，不再依赖环境变量
+    client = genai.Client(
+        api_key=api_key,
+        http_options={
+            "proxy": "http://127.0.0.1:7897",  # <--- 显式指定，解决 Connection Refused
+            "timeout": 60000, # 顺便设置个长一点的超时(毫秒)
+        }
+    )
 except Exception as e:
     st.error(f"无法初始化客户端，请检查代理设置: {e}")
     st.stop()
@@ -231,3 +238,4 @@ if user_prompt := st.chat_input("请输入指令..."):
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
             st.info("提示：如果提示连接超时，请检查你的 VPN 是否开启，且端口是否确实为 7897")
+
