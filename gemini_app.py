@@ -75,9 +75,10 @@ with st.sidebar:
     
     # 硬编码模型列表
     model_options = [
-        "gemini-1.5-flash-002",   # 使用最新的 002 稳定版
-        "gemini-1.5-pro-002",     # 使用最新的 002 稳定版
-        "gemini-2.0-flash-exp",   # 2.0 实验版
+        "gemini-2.5-flash",       # 截图中的新模型（推荐首选，速度快）
+        "gemini-2.5-pro",         # 截图中的强力模型
+        "gemini-1.5-flash-002",   # 1.5 的稳定版（如果 2.5 报错，就切回这个）
+        "gemini-1.5-pro-002",     # 1.5 的强力稳定版
     ]
     selected_model = st.selectbox("选择模型引擎：", model_options, index=0)
     
@@ -210,4 +211,5 @@ if user_prompt := st.chat_input("请输入指令..."):
         except Exception as e:
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
+
 
