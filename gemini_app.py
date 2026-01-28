@@ -74,7 +74,11 @@ with st.sidebar:
     st.title("🧠 设置")
     
     # 硬编码模型列表
-    model_options = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+    model_options = [
+        "gemini-1.5-flash-002",   # 使用最新的 002 稳定版
+        "gemini-1.5-pro-002",     # 使用最新的 002 稳定版
+        "gemini-2.0-flash-exp",   # 2.0 实验版
+    ]
     selected_model = st.selectbox("选择模型引擎：", model_options, index=0)
     
     st.success("☁️ 云端环境：已自动直连 Google")
@@ -206,3 +210,4 @@ if user_prompt := st.chat_input("请输入指令..."):
         except Exception as e:
             status.update(label="❌ 发生错误", state="error")
             st.error(f"错误详情: {str(e)}")
+
