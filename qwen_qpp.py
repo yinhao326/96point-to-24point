@@ -59,7 +59,10 @@ with st.sidebar:
     
     # 【核心修改 2】：必须使用套餐支持的精确模型名称
     model_options = [
-        "qwen3.6-plus"  # 根据你的截图，套餐可用模型为 qwen3.6-plus
+        "qwen3.6-plus"
+        "deepseek-v3.2", 
+        "glm-5", 
+        "MiniMax-M2.5"# 根据你的截图，套餐可用模型为 qwen3.6-plus
     ]
     selected_model = st.selectbox("选择千问引擎：", model_options, index=0)
     st.success("☁️ 云端环境：千问订阅套餐专属通道")
