@@ -10,7 +10,7 @@ from openai import OpenAI
 
 # ================= 0. 配置与初始化 =================
 
-st.set_page_config(page_title="AI 能源分析台 (千问多文件版)", layout="wide")
+st.set_page_config(page_title="AI 能源分析台 (千问套餐版)", layout="wide")
 
 if "DASHSCOPE_API_KEY" in st.secrets:
     api_key = st.secrets["DASHSCOPE_API_KEY"]
@@ -19,7 +19,7 @@ else:
     st.stop()
 
 try:
-    # 初始化千问客户端
+    # 【核心修改 1】：必须使用截图中的“套餐专属 Base URL”
     client = OpenAI(
         api_key=api_key,
         base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
@@ -57,14 +57,12 @@ if "file_hash" not in st.session_state: st.session_state.file_hash = None
 with st.sidebar:
     st.title("🧠 设置")
     
-    # 千问模型列表
+    # 【核心修改 2】：必须使用套餐支持的精确模型名称
     model_options = [
-        "qwen-max",       
-        "qwen-plus",         
-        "qwen-turbo"
+        "qwen3.6-plus"  # 根据你的截图，套餐可用模型为 qwen3.6-plus
     ]
     selected_model = st.selectbox("选择千问引擎：", model_options, index=0)
-    st.success("☁️ 云端环境：直连千问 (DashScope)")
+    st.success("☁️ 云端环境：千问订阅套餐专属通道")
     st.divider()
     
     st.header("📂 文件上传")
@@ -81,7 +79,7 @@ with st.sidebar:
                     else:
                         df_temp = pd.read_excel(f)
                     
-                    # 【核心修复】强制将所有列名转为字符串，防止数字列名导致的 TypeError 和 to_markdown() 报错
+                    # 强制将所有列名转为字符串，防止数字列名报错
                     df_temp.columns = df_temp.columns.astype(str)
                     st.session_state.dfs_dict[f.name] = df_temp
                 
@@ -112,7 +110,7 @@ with st.sidebar:
         st.download_button("📥 下载汇总结果", out.getvalue(), "Merged_Result.xlsx", use_container_width=True)
 
 # ================= 4. 主界面 =================
-st.title("⚡ AI 能源数据分析台 (千问 V38)")
+st.title("⚡ AI 能源数据分析台 (千问 V39)")
 
 if not st.session_state.dfs_dict and st.session_state.current_df is None:
     st.info("👈 请先在左侧上传一个或多个数据文件")
