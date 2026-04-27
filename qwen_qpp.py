@@ -57,33 +57,55 @@ if "file_hash" not in st.session_state: st.session_state.file_hash = None
 with st.sidebar:
     st.title("🧠 设置")
     
-    # 【核心修改 2】：必须使用套餐支持的精确模型名称
     model_options = [
         "qwen3.6-plus",
         "deepseek-v3.2", 
         "glm-5", 
-        "MiniMax-M2.5"# 根据你的截图，套餐可用模型为 qwen3.6-plus
+        "MiniMax-M2.5"  
     ]
     selected_model = st.selectbox("选择千问引擎：", model_options, index=0)
     st.success("☁️ 云端环境：千问订阅套餐专属通道")
     st.divider()
     
     st.header("📂 文件上传")
+    
+    # 【UI 修改】：更新文案
+    header_mode = st.radio(
+        "选择 Excel 表头类型：", 
+        ["单行表头 (标准文件)", "双层表头 (保留原表层级)"], 
+        index=0
+    )
+    
     uploaded_files = st.file_uploader("上传 Excel/CSV (支持多选)", type=["xlsx", "xls", "csv"], accept_multiple_files=True)
     
     if uploaded_files:
-        current_hash = hash(tuple(f.getvalue() for f in uploaded_files))
+        current_hash = hash(tuple(f.getvalue() for f in uploaded_files) + (header_mode,))
         if st.session_state.file_hash != current_hash:
             try:
                 st.session_state.dfs_dict = {}
                 for f in uploaded_files:
                     if f.name.endswith('.csv'):
                         df_temp = pd.read_csv(f)
+                        df_temp.columns = df_temp.columns.astype(str)
                     else:
-                        df_temp = pd.read_excel(f)
-                    
-                    # 强制将所有列名转为字符串，防止数字列名报错
-                    df_temp.columns = df_temp.columns.astype(str)
+                        if header_mode == "单行表头 (标准文件)":
+                            # 标准单行读取
+                            df_temp = pd.read_excel(f)
+                            df_temp.columns = df_temp.columns.astype(str)
+                        else:
+                            # 【核心修改】：双层表头读取，保留 MultiIndex 结构以还原 Excel 视觉
+                            df_temp = pd.read_excel(f, header=[0, 1])
+                            
+                            # 优化表头显示：将无意义的 "Unnamed: x_level_y" 替换为空白，让 Streamlit 渲染更干净
+                            new_cols = []
+                            for col in df_temp.columns:
+                                level_0 = "" if "Unnamed" in str(col[0]) else str(col[0])
+                                level_1 = "" if "Unnamed" in str(col[1]) else str(col[1])
+                                new_cols.append((level_0, level_1))
+                            
+                            # 重新赋值为多层表头
+                            df_temp.columns = pd.MultiIndex.from_tuples(new_cols)
+                            
                     st.session_state.dfs_dict[f.name] = df_temp
                 
                 st.session_state.file_hash = current_hash
@@ -92,7 +114,7 @@ with st.sidebar:
                 file_names_str = "\n".join([f"- `{name}`" for name in st.session_state.dfs_dict.keys()])
                 st.session_state.chat_history = [{
                     "role": "assistant", 
-                    "content": f"✅ **成功加载 {len(uploaded_files)} 个文件！**\n{file_names_str}\n\n请下达指令。"
+                    "content": f"✅ **成功以【{header_mode}】模式加载 {len(uploaded_files)} 个文件！**\n{file_names_str}\n\n请下达指令。"
                 }]
                 st.rerun()
             except Exception as e:
