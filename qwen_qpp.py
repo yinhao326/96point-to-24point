@@ -131,7 +131,10 @@ with st.sidebar:
         st.divider()
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine='openpyxl') as writer:
-            st.session_state.current_df.to_excel(writer, index=False)
+            if isinstance(st.session_state.current_df.columns, pd.MultiIndex):
+                st.session_state.current_df.to_excel(writer, index=True)
+            else:
+                st.session_state.current_df.to_excel(writer, index=False)
         st.download_button("📥 下载汇总结果", out.getvalue(), "Merged_Result.xlsx", use_container_width=True)
 
 # ================= 4. 主界面 =================
